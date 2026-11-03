@@ -66,6 +66,9 @@ class AIVideoGenerator {
     this.logger = new Logger('AIVideoGenerator');
     const resolvedCredentials = credentials?.credentials || credentials || {};
     this.db = options.db || null;
+    this.assetsDir = options.assetsDir || path.join(__dirname, '..', 'data', 'assets');
+    this.imageGenerationEnabled = options.imageGenerationEnabled ?? process.env.IMAGE_GENERATION_ENABLED !== 'false';
+    this.unavailableImageProviders = new Set();
     this.getMediaDuration = options.getMediaDuration || getMediaDuration;
     this.lastVideoResult = null;
     this.lastNarrationResult = null;
@@ -78,14 +81,14 @@ class AIVideoGenerator {
       this.openai = new OpenAI({ apiKey: openaiKey });
       this.logger.info('OpenAI service initialized');
     } else {
-      this.logger.warn('OpenAI API key not found - AI features will be simulated');
+      this.logger.info('OpenAI media provider is not configured; OpenAI-specific image generation and TTS are unavailable.');
     }
     
     if (replicateKey) {
       this.replicate = new Replicate({ auth: replicateKey });
       this.logger.info('Replicate service initialized');
     } else {
-      this.logger.warn('Replicate API key not found - advanced video generation unavailable');
+      this.logger.info('Replicate video provider is not configured; local slideshow generation remains available.');
     }
 
     // Gemini media generation (images + native TTS) — free-tier alternative to OpenAI
@@ -247,41 +250,54 @@ class AIVideoGenerator {
 
   async generateVisualAssets(prompt, style = "ethereal", count = 1) {
     this.logger.info(`Generating ${count} visual assets with style: ${style}`);
+    const assetCount = Math.max(1, Math.min(20, Math.floor(Number(count) || 1)));
+    if (!this.imageGenerationEnabled) {
+      this.logger.info('Paid image generation is disabled; creating local visuals.');
+      return this.generateLocalVisualAssets(prompt, style, assetCount);
+    }
 
-    try {
-      if (!this.openai && !this.gemini) {
-        return await this.simulateVisualAssets(prompt, style, count);
-      }
+    const providersAvailable = Boolean(
+      (this.openai && !this.unavailableImageProviders.has('OpenAI')) ||
+      (this.gemini && !this.unavailableImageProviders.has('Gemini'))
+    );
+    if (!providersAvailable) {
+      this.logger.info('No available image provider; creating local visuals.');
+      return this.generateLocalVisualAssets(prompt, style, assetCount);
+    }
 
-      const enhancedPrompt = this.enhanceVisualPrompt(prompt, style);
-      const localPaths = [];
+    const enhancedPrompt = this.enhanceVisualPrompt(prompt, style);
+    const localPaths = [];
 
-      for (let i = 0; i < count; i++) {
-        const imagePath = path.join(__dirname, '..', 'data', 'assets', `visual_${Date.now()}_${i}.png`);
+    for (let i = 0; i < assetCount; i++) {
+      try {
+        const imagePath = path.join(this.assetsDir, `visual_${Date.now()}_${i}.png`);
         await this.generateImage(enhancedPrompt, imagePath);
         localPaths.push(imagePath);
+      } catch (error) {
+        this.logger.warn(`Image provider unavailable; using free local visuals instead: ${error.message}`);
+        return this.generateLocalVisualAssets(prompt, style, assetCount);
       }
-
-      this.logger.info(`Generated ${localPaths.length} visual assets`);
-      return localPaths;
-    } catch (error) {
-      this.logger.error('Visual asset generation failed:', error);
-      return await this.simulateVisualAssets(prompt, style, count);
     }
+
+    this.logger.info(`Generated ${localPaths.length} visual assets`);
+    return localPaths;
   }
 
   async generateImage(prompt, imagePath) {
+    if (!this.imageGenerationEnabled) {
+      throw new Error('Paid image generation is disabled by IMAGE_GENERATION_ENABLED=false');
+    }
     await fs.mkdir(path.dirname(imagePath), { recursive: true });
 
     const providers = [];
-    if (this.openai) {
+    if (this.openai && !this.unavailableImageProviders.has('OpenAI')) {
       providers.push({ name: 'OpenAI', model: OPENAI_IMAGE_MODEL, run: () => this.generateOpenAIImage(prompt, imagePath) });
     }
-    if (this.gemini) {
+    if (this.gemini && !this.unavailableImageProviders.has('Gemini')) {
       providers.push({ name: 'Gemini', model: this.geminiImageModel(), run: () => this.generateGeminiImage(prompt, imagePath) });
     }
     if (!providers.length) {
-      throw new Error('No image generation provider configured');
+      throw new Error('No available image generation provider');
     }
 
     // Try every configured provider before giving up, so a broken OpenAI key
@@ -293,6 +309,14 @@ class AIVideoGenerator {
       } catch (error) {
         const description = describeImageProviderError(provider.name, provider.model, error);
         failures.push(description);
+        const details = String(error?.message || error || '');
+        if (
+          (/RESOURCE_EXHAUSTED|insufficient_quota/i.test(details) && /quota|limit:\s*0|billing/i.test(details)) ||
+          (Number(error?.status) === 429 && /quota|billing|limit:\s*0/i.test(details))
+        ) {
+          this.unavailableImageProviders.add(provider.name);
+          this.logger.warn(`${provider.name} image quota is exhausted; it will be skipped for the rest of this run.`);
+        }
         if (index < providers.length - 1) {
           this.logger.warn(`${description} Trying ${providers[index + 1].name} instead.`);
         }
@@ -302,6 +326,55 @@ class AIVideoGenerator {
     const error = new Error(failures.join(' | '));
     error.providerFailures = failures;
     throw error;
+  }
+
+  async generateLocalVisualAssets(prompt, style, count) {
+    const themes = {
+      modern: ['#071a2d', '#155e75', '#67e8f9'],
+      cinematic: ['#160f24', '#581c3c', '#fda4af'],
+      animated: ['#172554', '#6d28d9', '#facc15'],
+      abstract: ['#111827', '#3730a3', '#a5b4fc'],
+      ethereal: ['#111827', '#4c1d95', '#c4b5fd']
+    };
+    const [background, secondary, accent] = themes[String(style || '').toLowerCase()] || themes.modern;
+    const heading = String(prompt || 'A useful visual guide')
+      .replace(/[,.!?;:]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 72) || 'A useful visual guide';
+    const escapedHeading = heading.replace(/[&<>"']/g, character => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;'
+    })[character]);
+    const lines = escapedHeading.match(/.{1,28}(?:\s|$)/g)?.map(line => line.trim()).filter(Boolean) || [escapedHeading];
+    const titleLines = lines.slice(0, 3).map((line, index) =>
+      `<text x="140" y="${410 + index * 82}" fill="#ffffff" font-family="Arial,sans-serif" font-size="58" font-weight="700">${line}</text>`
+    ).join('');
+
+    await fs.mkdir(this.assetsDir, { recursive: true });
+    const paths = [];
+    for (let index = 0; index < count; index++) {
+      const imagePath = path.join(this.assetsDir, `visual_local_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}.png`);
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+        <defs>
+          <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${background}"/><stop offset="1" stop-color="${secondary}"/></linearGradient>
+          <radialGradient id="glow"><stop stop-color="${accent}" stop-opacity=".42"/><stop offset="1" stop-color="${accent}" stop-opacity="0"/></radialGradient>
+        </defs>
+        <rect width="1920" height="1080" fill="url(#bg)"/>
+        <circle cx="1580" cy="250" r="620" fill="url(#glow)"/>
+        <circle cx="1510" cy="500" r="245" fill="none" stroke="${accent}" stroke-opacity=".42" stroke-width="2"/>
+        <circle cx="1510" cy="500" r="175" fill="none" stroke="#fff" stroke-opacity=".17" stroke-width="2"/>
+        <path d="M1180 760h560M1240 815h440M1300 870h320" stroke="#fff" stroke-opacity=".22" stroke-width="12" stroke-linecap="round"/>
+        <rect x="112" y="146" width="1696" height="788" rx="40" fill="#07111f" fill-opacity=".26" stroke="#fff" stroke-opacity=".16" stroke-width="2"/>
+        <rect x="140" y="235" width="12" height="78" rx="6" fill="${accent}"/>
+        <text x="180" y="286" fill="${accent}" font-family="Arial,sans-serif" font-size="26" font-weight="700" letter-spacing="5">QUICK VISUAL GUIDE</text>
+        ${titleLines}
+        <path d="M140 760h760" stroke="${accent}" stroke-opacity=".65" stroke-width="5" stroke-linecap="round"/>
+        <text x="140" y="824" fill="#fff" fill-opacity=".76" font-family="Arial,sans-serif" font-size="25">Free local graphics · no image API or billing required</text>
+      </svg>`;
+      await sharp(Buffer.from(svg)).png().toFile(imagePath);
+      paths.push(imagePath);
+    }
+    return paths;
   }
 
   geminiImageModel() {
@@ -984,11 +1057,7 @@ class AIVideoGenerator {
 
   async cleanupDirectory(dirPath) {
     try {
-      const files = await fs.readdir(dirPath);
-      for (const file of files) {
-        await fs.unlink(path.join(dirPath, file));
-      }
-      await fs.rmdir(dirPath);
+      await fs.rm(dirPath, { recursive: true, force: true });
     } catch (error) {
       this.logger.warn('Cleanup failed:', error.message);
     }
@@ -998,7 +1067,7 @@ class AIVideoGenerator {
     this.logger.info('Generating custom thumbnail...');
 
     try {
-      if (!this.openai && !this.gemini) {
+      if (!this.imageGenerationEnabled || !this.openai && !this.gemini) {
         return await this.simulateThumbnailGeneration(script, style);
       }
 

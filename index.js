@@ -1415,7 +1415,7 @@ class YouTubeAutomationAgent {
       });
       await this.db.updateGenerationJob(jobId, {
         status: 'completed',
-        stage: result.reviewStatus === 'approved' ? 'scheduled' : result.reviewStatus,
+        stage: result.status === 'published' ? 'published' : result.reviewStatus,
         progress: 100,
         productionId: result.contentId,
         title: result.title,
@@ -1555,14 +1555,38 @@ class YouTubeAutomationAgent {
           selectedTitleVariant: 0,
           selectedThumbnailVariant: 0
         } : {},
-        reviewNotes: quality.passed ? null : `Blocking checks failed: ${quality.blockingFailures.join(', ')}`,
+        reviewNotes: quality.passed
+          ? (approvalRequired ? null : 'Automatically approved after all blocking quality checks passed')
+          : `Blocking checks failed: ${quality.blockingFailures.join(', ')}`,
         reviewedAt: approvalRequired ? null : new Date().toISOString()
       });
 
-      let scheduleEntry = null;
+      let publication = null;
       if (reviewStatus === 'approved') {
-        scheduleEntry = await this.agents.publishing.scheduleContent(productionData);
-        await this.db.updateProductionStatus(contentId, scheduleEntry ? 'scheduled' : productionData.status);
+        try {
+          publication = await this.agents.publishing.publishImmediately({
+            ...productionData,
+            id: contentId
+          });
+          await this.db.updateProductionStatus(contentId, publication.status);
+          await this.operator.notify({
+            type: 'content_auto_published',
+            level: 'success',
+            title: 'Content automatically approved and published',
+            message: `${script.title} was published immediately`,
+            data: { contentId, youtubeUrl: publication.youtubeUrl }
+          });
+        } catch (error) {
+          await this.db.updateProductionStatus(contentId, 'failed');
+          await this.operator.notify({
+            type: 'content_publish_failed',
+            level: 'error',
+            title: 'Automatic publishing failed',
+            message: `${script.title} could not be published: ${error.message}`,
+            data: { contentId }
+          });
+          throw error;
+        }
       } else {
         await this.db.updateProductionStatus(contentId, reviewStatus);
         await this.operator.notify({
@@ -1577,10 +1601,12 @@ class YouTubeAutomationAgent {
       return {
         contentId,
         title: script.title,
-        status: productionData.status,
+        status: publication?.status || reviewStatus,
         reviewStatus,
         qualityScore: quality.score,
-        scheduledFor: scheduleEntry ? scheduleEntry.publishTime : null
+        scheduledFor: null,
+        publishedAt: publication?.publishedAt || null,
+        youtubeUrl: publication?.youtubeUrl || null
       };
     });
   }
@@ -1781,7 +1807,7 @@ class YouTubeAutomationAgent {
         ? { ...bundle.assets, thumbnail: { ...bundle.assets.thumbnail, path: thumbnailVariant.path } }
         : bundle.assets,
       timeline: bundle.timeline,
-      scheduledPublishTime: editorData.publishTime || input.publishTime || bundle.scheduled_publish_time,
+      scheduledPublishTime: new Date().toISOString(),
       priority: bundle.priority,
       estimatedDuration: bundle.estimated_duration,
       privacyStatus: editorData.privacyStatus || process.env.DEFAULT_PRIVACY_STATUS || 'private',
@@ -1802,43 +1828,25 @@ class YouTubeAutomationAgent {
       throw error;
     }
 
-    let scheduleEntry = bundle.schedule;
-    if (!scheduleEntry) {
-      scheduleEntry = await this.agents.publishing.scheduleContent(productionData);
-    } else if (scheduleEntry.status !== 'published') {
-      scheduleEntry.title = productionData.script.title;
-      scheduleEntry.publishTime = productionData.scheduledPublishTime;
-      scheduleEntry.status = 'scheduled';
-      scheduleEntry.metadata = {
-        ...scheduleEntry.metadata,
-        seo: productionData.seo,
-        thumbnail: productionData.assets.thumbnail,
-        video: productionData.assets.finalVideo,
-        audio: productionData.assets.audio,
-        captions: productionData.assets.captions,
-        privacyStatus: editorData.privacyStatus || process.env.DEFAULT_PRIVACY_STATUS || 'private',
-        containsSyntheticMedia: productionData.containsSyntheticMedia
-      };
-      await this.db.updateScheduleEntry(scheduleEntry);
-      await this.agents.publishing.loadPublishQueue();
-    }
-    if (!scheduleEntry) {
-      const error = new Error('A real MP4 is required before content can be approved for scheduling');
-      error.status = 409;
-      throw error;
-    }
-
     await this.db.saveContentReview(bundle.id, {
       status: 'approved', editorData, qualityChecks: quality.checks,
       reviewNotes: input.reviewNotes || 'Approved by operator', reviewedAt: new Date().toISOString()
     });
-    await this.db.updateProductionStatus(bundle.id, 'scheduled');
+    const publication = await this.agents.publishing.publishImmediately(productionData);
+    await this.db.updateProductionStatus(bundle.id, publication.status);
     await this.operator.notify({
-      type: 'content_approved', level: 'success', title: 'Content approved',
-      message: `${productionData.script.title} is scheduled for ${scheduleEntry.publishTime}`,
-      data: { productionId, publishTime: scheduleEntry.publishTime }
+      type: 'content_auto_published', level: 'success', title: 'Content approved and published',
+      message: `${productionData.script.title} was published immediately`,
+      data: { productionId, youtubeUrl: publication.youtubeUrl }
     });
-    return { productionId, reviewStatus: 'approved', qualityScore: quality.score, schedule: scheduleEntry };
+    return {
+      productionId,
+      reviewStatus: 'approved',
+      status: publication.status,
+      qualityScore: quality.score,
+      publishedAt: publication.publishedAt,
+      youtubeUrl: publication.youtubeUrl
+    };
   }
 
   async start() {
@@ -1867,7 +1875,7 @@ class YouTubeAutomationAgent {
       if (this.setupRequired) {
         console.log(chalk.yellow('\n⚙️  Setup is required. The dashboard is available; run npm run walkthrough to enable generation.'));
       } else {
-        console.log(chalk.yellow('\n🤖 Automation is active. Approved content will be published on schedule.'));
+        console.log(chalk.yellow('\n🤖 Automation is active. Videos that pass quality checks are approved and published immediately.'));
       }
     });
   }

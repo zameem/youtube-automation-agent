@@ -246,7 +246,7 @@ class ShortsRepurposingService {
 
   async approve(productionId, clipId, input = {}) {
     if (input.confirmed !== true) {
-      const error = new Error('Confirm the inherited evidence and Short schedule before approval');
+      const error = new Error('Confirm the inherited evidence and Short publication before approval');
       error.status = 409;
       error.code = 'SHORT_APPROVAL_REQUIRED';
       throw error;
@@ -254,7 +254,7 @@ class ShortsRepurposingService {
     const bundle = await this.requireSource(productionId);
     const clip = await this.requireClip(productionId, clipId);
     if (bundle.review_status !== 'approved') {
-      const error = new Error('Approve the source production before scheduling its Shorts');
+      const error = new Error('Approve the source production before publishing its Shorts');
       error.status = 409;
       throw error;
     }
@@ -270,8 +270,6 @@ class ShortsRepurposingService {
       throw error;
     }
     await this.requireFile(clip.outputPath, 'The rendered Short MP4 is missing');
-    const publishTime = new Date(input.publishTime || clip.publishTime);
-    if (Number.isNaN(publishTime.getTime())) throw new Error('Choose a valid Short publish time');
     const privacyStatus = input.privacyStatus || clip.privacyStatus || 'private';
     if (!['private', 'unlisted', 'public'].includes(privacyStatus)) throw new Error('Short privacy is invalid');
     const parentUrl = bundle.schedule?.youtube_url || bundle.schedule?.youtubeUrl;
@@ -279,7 +277,7 @@ class ShortsRepurposingService {
       ? `${clip.description}\n\nWatch the full video: ${parentUrl}`.slice(0, 5000)
       : clip.description;
     const audio = bundle.assets?.audio || {};
-    const schedule = await this.publishing.scheduleContent({
+    const publication = await this.publishing.publishImmediately({
       id: clip.id,
       script: { title: clip.title },
       seo: {
@@ -293,7 +291,6 @@ class ShortsRepurposingService {
         captions: clip.captionsPath ? { path: clip.captionsPath } : null,
         thumbnail: null
       },
-      scheduledPublishTime: publishTime.toISOString(),
       priority: 60,
       privacyStatus,
       containsSyntheticMedia: evidence.containsSyntheticMedia,
@@ -301,14 +298,15 @@ class ShortsRepurposingService {
       sourceProductionId: productionId,
       shortClipId: clip.id
     });
-    if (!schedule) {
-      const error = new Error('The Short could not be scheduled because its rendered media or narration evidence is incomplete');
+    if (!publication) {
+      const error = new Error('The Short could not be published because its rendered media or narration evidence is incomplete');
       error.status = 409;
       throw error;
     }
     return this.db.updateShortClip(clip.id, {
-      status: 'scheduled', publishTime: publishTime.toISOString(), privacyStatus,
-      inheritedEvidence: evidence, approvedAt: new Date().toISOString(), scheduleId: schedule.id,
+      status: publication.status, publishTime: publication.publishedAt || new Date().toISOString(), privacyStatus,
+      inheritedEvidence: evidence, approvedAt: new Date().toISOString(), scheduleId: publication.id,
+      youtubeId: publication.youtubeId, youtubeUrl: publication.youtubeUrl,
       error: null
     });
   }

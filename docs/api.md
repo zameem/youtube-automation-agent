@@ -152,7 +152,7 @@ curl -X POST http://localhost:3456/api/content/:contentId/approve \
 | POST | `/api/content/:productionId/shorts/propose` | Create Short drafts |
 | PATCH | `/api/content/:productionId/shorts/:clipId` | Edit a Short draft |
 | POST | `/api/content/:productionId/shorts/:clipId/render` | Render a Short |
-| POST | `/api/content/:productionId/shorts/:clipId/approve` | Approve and schedule a Short |
+| POST | `/api/content/:productionId/shorts/:clipId/approve` | Approve and publish a Short immediately |
 | GET | `/api/content/:productionId/shorts/:clipId/asset/:kind` | Download a Short's `video` or `captions` |
 
 ### Operator, learning, and experiments

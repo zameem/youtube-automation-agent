@@ -1004,7 +1004,7 @@ function renderShortsStudio(item) {
       <button type="button" class="button secondary small" data-propose-shorts="${escapeHTML(item.id)}">${clips.length ? 'Refresh drafts' : 'Create 3 Short drafts'}</button>
     </div>
     <div class="shorts-evidence ${parentApproved ? 'ready' : ''}">
-      <span>${parentApproved ? '✓ Source production approved' : 'Source approval required before scheduling'}</span>
+      <span>${parentApproved ? '✓ Source production approved' : 'Source approval required before publishing'}</span>
       <span>${escapeHTML(item.provenance?.status === 'verified' ? 'Evidence verified' : item.provenance?.status === 'not_required' ? 'No factual claims declared' : 'Evidence review incomplete')}</span>
       <span>Local render · no new provider call</span>
     </div>
@@ -1022,12 +1022,11 @@ function renderShortsStudio(item) {
           <label><span>Tags</span><input data-short-field="tags" value="${escapeHTML((clip.tags || []).join(', '))}" ${locked ? 'disabled' : ''}></label>
           <div class="form-grid two">
             <label><span>Vertical layout</span><select data-short-field="layout" ${locked ? 'disabled' : ''}><option value="blur" ${clip.layout === 'blur' ? 'selected' : ''}>Blurred canvas</option><option value="crop" ${clip.layout === 'crop' ? 'selected' : ''}>Center crop</option><option value="stacked" ${clip.layout === 'stacked' ? 'selected' : ''}>Stacked focus</option></select></label>
-            <label><span>Publish time</span><input data-short-field="publishTime" type="datetime-local" value="${toLocalInput(clip.publishTime)}" ${locked ? 'disabled' : ''}></label>
             <label><span>Privacy</span><select data-short-field="privacyStatus" ${locked ? 'disabled' : ''}><option value="private" ${clip.privacyStatus === 'private' ? 'selected' : ''}>Private</option><option value="unlisted" ${clip.privacyStatus === 'unlisted' ? 'selected' : ''}>Unlisted</option><option value="public" ${clip.privacyStatus === 'public' ? 'selected' : ''}>Public</option></select></label>
           </div>
           <p class="short-rationale">${escapeHTML(clip.rationale || '')}${clip.error ? `<br><span class="danger-text">${escapeHTML(clip.error)}</span>` : ''}</p>
           ${clip.youtubeUrl ? `<a class="source-link" href="${escapeHTML(clip.youtubeUrl)}" target="_blank" rel="noopener">Open published Short ↗</a>` : ''}
-          ${!locked ? `<div class="short-actions"><button type="button" class="text-button" data-short-save>Save draft</button><button type="button" class="button secondary small" data-short-render>${rendered ? 'Render again' : 'Render 9:16'}</button><button type="button" class="button primary small" data-short-approve ${!parentApproved || clip.status !== 'rendered' ? 'disabled' : ''} title="${!parentApproved ? 'Approve the source production first' : clip.status !== 'rendered' ? 'Render this Short first' : 'Confirm and schedule this Short'}">Approve &amp; schedule</button></div>` : ''}
+          ${!locked ? `<div class="short-actions"><button type="button" class="text-button" data-short-save>Save draft</button><button type="button" class="button secondary small" data-short-render>${rendered ? 'Render again' : 'Render 9:16'}</button><button type="button" class="button primary small" data-short-approve ${!parentApproved || clip.status !== 'rendered' ? 'disabled' : ''} title="${!parentApproved ? 'Approve the source production first' : clip.status !== 'rendered' ? 'Render this Short first' : 'Confirm and publish this Short now'}">Approve &amp; publish now</button></div>` : ''}
         </div>
       </article>`;
     }).join('')}</div>` : '<p class="empty-inline">No Short drafts yet. Create three candidates from the current scene timeline without calling a paid provider.</p>'}
@@ -1071,16 +1070,16 @@ async function openContent(productionId) {
         ${renderShortsStudio(item)}
         ${renderDiscoverabilityPanel(item)}
         ${renderProvenanceEditor(item.provenance, canReview)}
-          <div class="form-grid two">
+          ${item.schedule && ['scheduled', 'paused', 'failed'].includes(item.schedule.status) ? `<div class="form-grid two">
             <label><span>Publish time</span><input name="publishTime" type="datetime-local" value="${toLocalInput(publishTime)}"></label>
             <label><span>Privacy</span><select name="privacyStatus"><option value="private" ${data.privacyStatus === 'private' ? 'selected' : ''}>Private</option><option value="unlisted" ${data.privacyStatus === 'unlisted' ? 'selected' : ''}>Unlisted</option><option value="public" ${data.privacyStatus === 'public' ? 'selected' : ''}>Public</option></select></label>
-          </div>
+          </div>` : `<div class="form-grid two"><label><span>Privacy</span><select name="privacyStatus"><option value="private" ${data.privacyStatus === 'private' ? 'selected' : ''}>Private</option><option value="unlisted" ${data.privacyStatus === 'unlisted' ? 'selected' : ''}>Unlisted</option><option value="public" ${data.privacyStatus === 'public' ? 'selected' : ''}>Public</option></select></label></div>`}
           <div class="settings-row">
             <label class="toggle"><input name="factChecked" type="checkbox" ${data.factChecked ? 'checked' : ''}><span></span> Facts and claims reviewed</label>
             <label class="toggle"><input name="rightsConfirmed" type="checkbox" ${data.rightsConfirmed ? 'checked' : ''}><span></span> Media rights confirmed</label>
           </div>
           ${item.schedule && !['published', 'uploading', 'uploaded', 'reconciliation_required'].includes(item.schedule.status) ? `<div class="form-actions"><button type="button" class="button secondary" data-reschedule-content="${escapeHTML(item.id)}">Reschedule</button><button type="button" class="button primary" data-publish-now-content="${escapeHTML(item.id)}">Publish now</button><button type="button" class="button danger" data-delete-schedule="${escapeHTML(item.id)}">Delete schedule</button></div>` : ''}
-          ${canReview ? `<div class="form-actions"><button type="button" class="button primary" data-approve-content="${escapeHTML(item.id)}">Approve & schedule</button><button type="button" class="button secondary" data-save-content="${escapeHTML(item.id)}">Save draft</button><button type="button" class="button danger" data-reject-content="${escapeHTML(item.id)}">Reject</button><button type="button" class="button ghost" data-retry-content="${escapeHTML(item.id)}">Regenerate</button></div>` : `<a class="button secondary" href="${escapeHTML(item.schedule?.youtube_url || '#')}" target="_blank" rel="noopener">Open on YouTube</a>`}
+          ${canReview ? `<div class="form-actions"><button type="button" class="button primary" data-approve-content="${escapeHTML(item.id)}">Approve &amp; publish now</button><button type="button" class="button secondary" data-save-content="${escapeHTML(item.id)}">Save draft</button><button type="button" class="button danger" data-reject-content="${escapeHTML(item.id)}">Reject</button><button type="button" class="button ghost" data-retry-content="${escapeHTML(item.id)}">Regenerate</button></div>` : `<a class="button secondary" href="${escapeHTML(item.schedule?.youtube_url || '#')}" target="_blank" rel="noopener">Open on YouTube</a>`}
       </form>`;
     $('#content-review-form').dataset.productionId = item.id;
     $('#content-dialog').showModal();
@@ -1447,11 +1446,11 @@ document.addEventListener('click', async event => {
         await refreshContentDialog(productionId, 'Vertical Short rendered locally with mobile captions.');
         return;
       }
-      if (!confirm('Confirm the inherited evidence, media rights, privacy, and publish time for this Short?')) return;
+      if (!confirm('Confirm the inherited evidence and media rights, then publish this Short now using the selected privacy setting?')) return;
       await api(`/api/content/${encodeURIComponent(productionId)}/shorts/${encodeURIComponent(clipId)}/approve`, {
         method: 'POST', body: JSON.stringify({ ...values, confirmed: true })
       });
-      await refreshContentDialog(productionId, 'Short approved and added to the publishing schedule.');
+      await refreshContentDialog(productionId, 'Short approved and published.');
     } catch (error) {
       showToast(error.message, 'error');
     }
@@ -1594,7 +1593,7 @@ document.addEventListener('click', async event => {
   if (approve) {
     try {
       await persistProvenance(approve.dataset.approveContent);
-      await mutate(`/api/content/${encodeURIComponent(approve.dataset.approveContent)}/approve`, 'POST', contentFormData(), 'Content approved and scheduled.');
+      await mutate(`/api/content/${encodeURIComponent(approve.dataset.approveContent)}/approve`, 'POST', contentFormData(), 'Content approved and published.');
       $('#content-dialog').close();
     } catch (_error) { /* toast already shown */ }
   }

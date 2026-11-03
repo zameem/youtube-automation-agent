@@ -1,10 +1,41 @@
-const { execFile } = require('child_process');
+const { execFile, spawnSync } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 const { promisify } = require('util');
 
 const execFileAsync = promisify(execFile);
 
 let cachedPath = null;
+
+function resolveBundledFFmpegPath() {
+  try {
+    const bundledPath = require('ffmpeg-static');
+    if (typeof bundledPath === 'string' && bundledPath && fs.existsSync(bundledPath)) {
+      return bundledPath;
+    }
+  } catch (_error) {
+    // The optional dependency may not have installed its binary yet.
+  }
+  return null;
+}
+
+function tryInstallBundledFFmpeg() {
+  const installScript = path.resolve(__dirname, '..', 'node_modules', 'ffmpeg-static', 'install.js');
+  if (!fs.existsSync(installScript)) {
+    return null;
+  }
+
+  const result = spawnSync(process.execPath, [installScript], {
+    cwd: path.resolve(__dirname, '..'),
+    stdio: 'ignore'
+  });
+
+  if (result.status === 0) {
+    return resolveBundledFFmpegPath();
+  }
+
+  return null;
+}
 
 /**
  * Resolve the FFmpeg binary to use, in order of preference:
@@ -22,13 +53,8 @@ function getFFmpegPath() {
     return cachedPath;
   }
 
-  try {
-    cachedPath = require('ffmpeg-static');
-  } catch (error) {
-    cachedPath = null;
-  }
-
-  cachedPath = cachedPath || 'ffmpeg';
+  const bundledPath = resolveBundledFFmpegPath() || tryInstallBundledFFmpeg();
+  cachedPath = bundledPath || 'ffmpeg';
   return cachedPath;
 }
 

@@ -24,7 +24,7 @@ Review Studio, mentioned throughout, is the **Content review** panel for each vi
 
 Before activating autonomous production, open **Production readiness** in the dashboard and choose **Run verified check**. The gate makes small live text and narration requests, verifies access to the connected YouTube channel, creates and decodes a temporary MP4 containing audio and video, and validates every queued upload's metadata. It never creates or uploads a YouTube video, and temporary probe assets are deleted after the run.
 
-AI image generation can incur a larger provider charge, so its live probe is a separate opt-in checkbox. Without that checkbox, image configuration is reported as verified, skipped, or using the built-in gradient fallback without making a paid image request.
+AI image generation can incur a larger provider charge, so its live probe is a separate opt-in checkbox. Without that checkbox, image configuration is reported as verified, skipped, or using the free local graphics fallback without making a paid image request. Set `IMAGE_GENERATION_ENABLED=false` in `.env` to disable paid image requests during production too.
 
 AI video verification has its own **Include paid video probe** checkbox. When enabled, the agent creates the provider's shortest supported test clip, records the external task and model, downloads and decodes the MP4, then removes the temporary asset. It never silently tries a second paid provider.
 
@@ -34,9 +34,9 @@ Results persist locally in SQLite with exact remediation steps. A recorded block
 
 Open **Autonomous operator** in the dashboard and describe the channel outcome, not a task list. Set the objective, audience, content pillars, publishing cadence, success metric, and boundaries, then choose **Activate & run now**.
 
-The operator refreshes YouTube trend and configured-competitor signals, checks recent channel topics, creates an evidence-labeled editorial plan, and sends each planned video through strategy, script, thumbnail, SEO, production, and workflow management. Active strategies also guide scheduled generation at the requested weekly cadence. Operator runs, decisions, progress, and failures persist in SQLite and remain visible in the dashboard.
+The operator refreshes YouTube trend and configured-competitor signals, checks recent channel topics, creates an evidence-labeled editorial plan, and sends each planned video through strategy, script, thumbnail, SEO, production, and workflow management. Active strategies also guide generation at the requested weekly cadence. Operator runs, decisions, progress, and failures persist in SQLite and remain visible in the dashboard.
 
-By default, finished videos wait for factual review, media-rights confirmation, and approval. Once approved, the publishing agent schedules and uploads them. Turning on autonomy does not bypass those gates, and simulated videos still cannot publish.
+By default, videos that pass all blocking quality checks are approved and uploaded immediately; no future YouTube publish time is set. The production-readiness and provenance gates remain in force, and simulated videos still cannot publish. Turn on **Require manual approval before publishing** in Channel setup to pause finished videos for manual review instead. Approving a video in Review Studio publishes it immediately. Uploads use the configured privacy status; the default is private.
 
 ## Resumable generation
 
@@ -70,7 +70,7 @@ Open **Shorts Repurposing Studio** inside Review Studio and choose **Create 3 Sh
 
 Choose a blurred-canvas, center-crop, or stacked-focus layout, then render a real 9:16 MP4 with mobile-safe burned captions and a separate SRT file. The source video and narration are reused, so the default workflow does not spend new image, video, or TTS credits. Changing the layout invalidates the prior render and requires a fresh local render.
 
-Every Short has its own approval and schedule. Scheduling remains blocked until the source production is approved, provenance is resolved, uploaded media rights are confirmed, every source scene is current, and the operator explicitly confirms the Short's privacy and publish time. Published Shorts retain their parent-production identity while their analytics use a separate Shorts baseline.
+Every Short has its own approval. Publishing remains blocked until the source production is approved, provenance is resolved, uploaded media rights are confirmed, every source scene is current, and the operator explicitly confirms immediate publication and the Short's privacy setting. Published Shorts retain their parent-production identity while their analytics use a separate Shorts baseline.
 
 ## Evidence desk
 

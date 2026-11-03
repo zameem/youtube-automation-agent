@@ -673,7 +673,7 @@ class Database {
       ['thumbnail_ab_testing', 'false', 'Enable thumbnail A/B testing'],
       ['content_backup_enabled', 'true', 'Enable content backup'],
       ['notification_enabled', 'true', 'Enable system notifications'],
-      ['approval_required', 'true', 'Require human approval before scheduling generated content'],
+      ['approval_required', 'false', 'Require human approval before publishing generated content'],
       ['automation_paused', 'false', 'Pause generation and publishing automation'],
       ['channel_timezone', 'America/Chicago', 'Timezone used to present channel schedules'],
       ['max_daily_posts', '1', 'Maximum posts per day'],
@@ -693,6 +693,13 @@ class Database {
         [key, value, description]
       );
     }
+
+    await this.executeQuery(
+      `UPDATE settings
+       SET value = 'false', description = 'Require human approval before publishing generated content'
+       WHERE key = 'approval_required'
+       AND description = 'Require human approval before scheduling generated content'`
+    );
 
     await this.executeQuery(
       `INSERT OR IGNORE INTO channel_profiles (

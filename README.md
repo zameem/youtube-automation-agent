@@ -1,8 +1,8 @@
 # YouTube Automation Agent
 
-**The open-source AI agent that runs a YouTube channel end to end, with you approving every video before it goes out.**
+**The open-source AI agent that runs a YouTube channel end to end, automatically approving and publishing videos that pass its quality checks.**
 
-It researches topics, writes scripts, generates narration and visuals, assembles real MP4s, writes titles, descriptions and tags, schedules approved videos, and learns from analytics and from what your audience says. It runs on your own machine with your own API keys.
+It researches topics, writes scripts, generates narration and visuals, assembles real MP4s, writes titles, descriptions and tags, publishes approved videos immediately, and learns from analytics and from what your audience says. It runs on your own machine with your own API keys.
 
 [![CI](https://github.com/darkzOGx/youtube-automation-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/darkzOGx/youtube-automation-agent/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -19,7 +19,7 @@ It researches topics, writes scripts, generates narration and visuals, assembles
 
 ## Why it's different
 
-- **You approve before anything is published.** Finished videos wait for fact review, media-rights confirmation, and your approval. Turning on autonomy doesn't skip those checks.
+- **Automatic publishing with quality gates.** Finished videos that pass blocking quality checks are approved and published immediately. Turn on **Require manual approval before publishing** to keep a human approval step.
 - **Real output only.** Simulated or placeholder media is clearly marked and can never be approved or uploaded.
 - **Self-hosted.** Your keys, media, and channel data stay on your machine.
 - **Learns from evidence, with your sign-off.** Lessons from analytics, retention curves, and comments shape future videos only after you approve them.
@@ -101,7 +101,7 @@ Each item links to its walkthrough in the [feature guide](docs/features.md).
 One key gets you started. Pick a text provider in the walkthrough: Gemini, OpenAI, OpenRouter (400+ models, including Claude), Kimi, MiMo, GLM, DeepSeek, or MiniMax. Gemini has free tiers for text and narration.
 
 - **Narration** comes from ElevenLabs, OpenAI, or Gemini, in that order of preference. A video without working narration can't be approved.
-- **Images** come from OpenAI or Gemini, each falling back to the other.
+- **Images** come from OpenAI or Gemini, each falling back to the other. When those aren't available, free local graphics and the built-in thumbnail designer take over; set `IMAGE_GENERATION_ENABLED=false` to skip paid image APIs.
 - **Video** is a free local slideshow by default. Choose Seedance, MiniMax H3, Gemini Omni, Kling, or Wan for generated clips and set a cap on paid seconds; if a provider fails, the video falls back to the slideshow.
 
 Models, keys, env vars, clip limits, and the `.env` essentials are in the [providers guide](docs/providers.md).

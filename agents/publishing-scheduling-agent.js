@@ -98,6 +98,30 @@ class PublishingSchedulingAgent {
     }
   }
 
+  async publishImmediately(productionData) {
+    const now = new Date().toISOString();
+    const scheduleEntry = await this.scheduleContent({
+      ...productionData,
+      scheduledPublishTime: now
+    });
+    if (!scheduleEntry) {
+      const error = new Error('A real MP4 with usable narration is required before content can be published');
+      error.status = 409;
+      error.code = 'PUBLISH_ASSETS_REQUIRED';
+      throw error;
+    }
+
+    if (['scheduled', 'paused', 'failed'].includes(scheduleEntry.status)) {
+      scheduleEntry.publishTime = now;
+      scheduleEntry.status = 'scheduled';
+      scheduleEntry.error = null;
+      await this.db.updateScheduleEntry(scheduleEntry);
+      await this.loadPublishQueue();
+    }
+
+    return this.publishContent(productionData.id, { publishNow: true });
+  }
+
   async publishContent(contentId, options = {}) {
     try {
       let productionBundle = null;
@@ -227,22 +251,30 @@ class PublishingSchedulingAgent {
     
     // Resolve the file before marking the network upload as attempted.
     const videoStream = await this.getVideoStream(metadata.video.path);
-    scheduleEntry.uploadAttempted = true;
-    const videoUpload = await this.youtube.videos.insert({
-      part: 'snippet,status',
-      requestBody: videoMetadata,
-      media: {
-        body: videoStream
+    let videoUpload;
+    let videoId;
+    try {
+      scheduleEntry.uploadAttempted = true;
+      videoUpload = await this.youtube.videos.insert({
+        part: 'snippet,status',
+        requestBody: videoMetadata,
+        media: {
+          body: videoStream
+        }
+      });
+
+      videoId = videoUpload.data.id;
+      this.logger.info(`Video uploaded with ID: ${videoId}`);
+      scheduleEntry.status = 'uploaded';
+      scheduleEntry.youtubeId = videoId;
+      scheduleEntry.youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      scheduleEntry.error = null;
+      await this.db.updateScheduleEntry(scheduleEntry);
+    } finally {
+      if (videoStream && typeof videoStream.destroy === 'function') {
+        videoStream.destroy();
       }
-    });
-    
-    const videoId = videoUpload.data.id;
-    this.logger.info(`Video uploaded with ID: ${videoId}`);
-    scheduleEntry.status = 'uploaded';
-    scheduleEntry.youtubeId = videoId;
-    scheduleEntry.youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    scheduleEntry.error = null;
-    await this.db.updateScheduleEntry(scheduleEntry);
+    }
     
     // Upload thumbnail
     if (metadata.thumbnail && metadata.thumbnail.path) {
@@ -426,7 +458,7 @@ class PublishingSchedulingAgent {
       if (scheduled.length > 0) {
         this.logger.info(`Publish queue: ${scheduled.length} item(s) waiting, next publish at ${scheduled[0].publishTime}`);
       } else {
-        this.logger.info('Publish queue is empty — nothing scheduled yet.');
+        this.logger.info('No legacy scheduled videos are queued; newly approved content publishes immediately.');
       }
       return 0;
     }

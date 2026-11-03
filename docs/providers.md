@@ -22,7 +22,7 @@ Anthropic Claude is available through OpenRouter (`anthropic/claude-fable-5.1`).
 ## Narration and images
 
 - **Narration** uses the first configured provider in this order: ElevenLabs (Eleven v3, needs `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID`), OpenAI (`gpt-4o-mini-tts`), then Gemini (`gemini-3.8-flash-tts`). A video without working narration can't be approved.
-- **Images** use OpenAI (GPT Image 2) and Gemini (`gemini-3.1-flash-image`, which needs billing enabled), each falling back to the other. With neither, slides use gradient backgrounds and thumbnails come from the built-in designer.
+- **Images** use OpenAI (GPT Image 2) and Gemini (`gemini-3.1-flash-image`, which needs billing enabled), each falling back to the other. When providers are missing or out of quota, the agent creates local graphics for slides and uses the built-in designer for thumbnails. To avoid paid image requests entirely, set `IMAGE_GENERATION_ENABLED=false` in `.env`; local graphics and the built-in thumbnail designer are used instead.
 
 ## Video
 

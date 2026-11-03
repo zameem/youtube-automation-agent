@@ -20,6 +20,7 @@ class SystemTest {
     
     const tests = [
       { name: 'Database Connection', test: () => this.testDatabase() },
+      { name: 'Automatic Publishing Setting Migration', test: () => this.testApprovalSettingMigration() },
       { name: 'Production Persistence', test: () => this.testProductionPersistence() },
       { name: 'Automation Events Table', test: () => this.testAutomationEventsTable() },
       { name: 'Local Activation Metrics', test: () => this.testActivationMetrics() },
@@ -32,6 +33,7 @@ class SystemTest {
       { name: 'Scene-Aware Retention Studio', test: () => this.testSceneAwareRetentionStudio() },
       { name: 'Production Readiness Gate', test: () => this.testProductionReadinessGate() },
       { name: 'Durable Multi-Provider Video Generation', test: () => this.testVideoProviderLayer() },
+      { name: 'Free Local Image Fallback', test: () => this.testFreeImageFallback() },
       { name: 'Scene Repair Studio', test: () => this.testSceneRepairStudio() },
       { name: 'Narration Reliability and Recovery', test: () => this.testNarrationReliability() },
       { name: 'Shorts Repurposing Studio', test: () => this.testShortsRepurposingStudio() },
@@ -43,6 +45,8 @@ class SystemTest {
       { name: 'Resumable Generation Checkpoints', test: () => this.testResumableGenerationCheckpoints() },
       { name: 'API Validation and Security', test: () => this.testAPIValidationAndSecurity() },
       { name: 'Publishing Safety', test: () => this.testPublishingSafety() },
+      { name: 'Automatic Immediate Publishing', test: () => this.testAutomaticImmediatePublishing() },
+      { name: 'Manual Approval Publishes Immediately', test: () => this.testManualApprovalPublishesImmediately() },
       { name: 'Multi-Provider Credential Validation', test: () => this.testCredentialValidation() },
       { name: 'AI Text Service Token Compatibility', test: () => this.testAITextServiceTokenParams() },
       { name: 'Placeholder Scheduling Guard', test: () => this.testPlaceholderSchedulingGuard() },
@@ -121,6 +125,37 @@ class SystemTest {
     
     await db.close();
     this.logger.info('Database test completed successfully');
+  }
+
+  async testApprovalSettingMigration() {
+    const fs = require('fs').promises;
+    const os = require('os');
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'yaa-approval-setting-'));
+    const db = new Database();
+    db.dbPath = path.join(directory, 'approval.db');
+
+    try {
+      await db.initialize();
+      await db.executeQuery(
+        'UPDATE settings SET value = ?, description = ? WHERE key = ?',
+        ['true', 'Require human approval before scheduling generated content', 'approval_required']
+      );
+      await db.insertDefaultSettings();
+      if (await db.getSetting('approval_required') !== 'false') {
+        throw new Error('Legacy installations retained the old approval-required default');
+      }
+
+      await db.setSetting('approval_required', 'true');
+      await db.insertDefaultSettings();
+      if (await db.getSetting('approval_required') !== 'true') {
+        throw new Error('The one-time setting migration overrode a current user preference');
+      }
+    } finally {
+      await db.close();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+
+    this.logger.info('Automatic publishing setting migration test completed successfully');
   }
 
   async testProductionPersistence() {
@@ -1169,6 +1204,83 @@ class SystemTest {
     this.logger.info('Durable multi-provider video generation test completed successfully');
   }
 
+  async testFreeImageFallback() {
+    const fs = require('fs').promises;
+    const os = require('os');
+    const sharp = require('sharp');
+    const { AIVideoGenerator } = require('./utils/ai-video-generator');
+    const { buildInitialSceneManifest } = require('./utils/scene-repair-service');
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'yaa-local-visuals-'));
+    let quotaRequests = 0;
+
+    try {
+      const localOnly = new AIVideoGenerator(
+        { gemini: { apiKey: 'test-key' } },
+        { assetsDir: path.join(directory, 'local-only'), imageGenerationEnabled: false }
+      );
+      localOnly.gemini.models.generateContent = async () => {
+        throw new Error('Paid image provider must not be called in local-only mode');
+      };
+      let directImageBlocked = false;
+      try {
+        await localOnly.generateImage('A paid image request', path.join(directory, 'must-not-exist.png'));
+      } catch (error) {
+        directImageBlocked = /IMAGE_GENERATION_ENABLED=false/.test(error.message);
+      }
+      if (!directImageBlocked) throw new Error('Local-only mode did not block direct paid image requests');
+      const localAssets = await localOnly.generateVisualAssets('A clear visual guide to free tools', 'modern', 2);
+      if (localAssets.length !== 2) throw new Error('Local-only mode did not create all requested visuals');
+      for (const asset of localAssets) {
+        const metadata = await sharp(asset).metadata();
+        if (metadata.width !== 1920 || metadata.height !== 1080) {
+          throw new Error('A local visual asset is not a valid full-size image');
+        }
+      }
+      const scenes = buildInitialSceneManifest({
+        script: {
+          title: 'Free visual fallback',
+          mainContent: { sections: [{ title: 'Use local images', content: ['Local image assets remain available for scene review.'] }] }
+        },
+        estimatedDuration: '0:30',
+        assets: {
+          video: { visualAssets: localAssets },
+          audio: { path: path.join(directory, 'narration.mp3'), simulated: false }
+        }
+      }, { actualProvider: 'slideshow' });
+      if (scenes.some(scene => scene.status !== 'ready' || !scene.assetPath)) {
+        throw new Error('Free local images did not satisfy the production scene asset requirements');
+      }
+
+      const quotaFallback = new AIVideoGenerator(
+        { gemini: { apiKey: 'test-key' } },
+        { assetsDir: path.join(directory, 'quota-fallback'), imageGenerationEnabled: true }
+      );
+      quotaFallback.gemini.models.generateContent = async () => {
+        quotaRequests++;
+        throw Object.assign(new Error(JSON.stringify({ error: {
+          code: 429,
+          message: 'Quota exceeded for image generation, limit: 0',
+          status: 'RESOURCE_EXHAUSTED'
+        } })), { status: 429 });
+      };
+      const fallbackAssets = await quotaFallback.generateVisualAssets('A visual about free software', 'abstract', 2);
+      const nextAssets = await quotaFallback.generateVisualAssets('Another free software visual', 'abstract', 1);
+      if (
+        fallbackAssets.length !== 2 ||
+        nextAssets.length !== 1 ||
+        quotaRequests !== 1 ||
+        fallbackAssets.some(asset => path.extname(asset) !== '.png')
+      ) {
+        throw new Error('An exhausted image quota did not switch to reusable local visual fallback');
+      }
+      for (const asset of fallbackAssets) await sharp(asset).metadata();
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+
+    this.logger.info('Free local image fallback test completed successfully');
+  }
+
   async testSceneRepairStudio() {
     const fs = require('fs').promises;
     const os = require('os');
@@ -1550,6 +1662,19 @@ class SystemTest {
       ]);
 
       const publishing = new PublishingSchedulingAgent(db, {});
+      publishing.publishImmediately = async productionData => {
+        const entry = await publishing.scheduleContent({
+          ...productionData,
+          scheduledPublishTime: new Date().toISOString()
+        });
+        entry.status = 'published';
+        entry.publishedAt = new Date().toISOString();
+        entry.youtubeId = 'youtube-short-1';
+        entry.youtubeUrl = 'https://www.youtube.com/shorts/youtube-short-1';
+        await db.updateScheduleEntry(entry);
+        await publishing.syncShortStatus(entry, 'published');
+        return entry;
+      };
       const service = new ShortsRepurposingService(db, publishing, {
         dataRoot: path.join(directory, 'shorts'), width: 360, height: 640, logger: this.logger
       });
@@ -1574,23 +1699,17 @@ class SystemTest {
       } catch (error) {
         approvalBlocked = error.code === 'SHORT_APPROVAL_REQUIRED';
       }
-      if (!approvalBlocked) throw new Error('Short scheduling bypassed explicit approval confirmation');
-      const scheduled = await service.approve(productionId, rendered.id, {
-        confirmed: true, publishTime: new Date(Date.now() + 172800000).toISOString(), privacyStatus: 'private'
+      if (!approvalBlocked) throw new Error('Short publishing bypassed explicit approval confirmation');
+      const publishedShort = await service.approve(productionId, rendered.id, {
+        confirmed: true, privacyStatus: 'private'
       });
       const schedule = await db.getLatestScheduleEntry(rendered.id);
       if (
-        scheduled.status !== 'scheduled' || !schedule || schedule.metadata.contentType !== 'short' ||
+        publishedShort.status !== 'published' || !schedule || schedule.status !== 'published' || schedule.metadata.contentType !== 'short' ||
         schedule.metadata.sourceProductionId !== productionId || schedule.metadata.containsSyntheticMedia !== true
       ) {
-        throw new Error('Approved Short did not inherit evidence into an independent schedule entry');
+        throw new Error('Approved Short did not publish immediately with inherited evidence');
       }
-      schedule.status = 'published';
-      schedule.youtubeId = 'youtube-short-1';
-      schedule.youtubeUrl = 'https://www.youtube.com/shorts/youtube-short-1';
-      schedule.publishedAt = new Date().toISOString();
-      await db.updateScheduleEntry(schedule);
-      await publishing.syncShortStatus(schedule, 'published');
       const published = await db.getShortClip(rendered.id);
       const context = await db.getPublishedContentContext('youtube-short-1');
       const attributes = new ChannelLearningEngine(db).extractAttributes({ videoDetails: { title: published.title } }, context);
@@ -2082,7 +2201,10 @@ class SystemTest {
       }
 
       // #65: a failing image provider falls through to the next configured one.
-      const generator = new AIVideoGenerator({ openai: { apiKey: 'test-key' }, gemini: { apiKey: 'test-key' } });
+      const generator = new AIVideoGenerator(
+        { openai: { apiKey: 'test-key' }, gemini: { apiKey: 'test-key' } },
+        { imageGenerationEnabled: true }
+      );
       let openAIAttempts = 0;
       generator.openai.images.generate = async () => {
         openAIAttempts++;
@@ -2323,7 +2445,7 @@ class SystemTest {
             };
           }
         },
-        publishing: { scheduleContent: async () => null }
+        publishing: { publishImmediately: async () => ({ status: 'published' }) }
       };
 
       const job = await db.createGenerationJob({
@@ -2633,7 +2755,156 @@ class SystemTest {
       throw new Error('Publish now still sent a stale scheduled publishAt value');
     }
 
+    let immediateProduction = null;
+    let immediateOptions = null;
+    const immediatePublish = new PublishingSchedulingAgent({
+      updateScheduleEntry: async () => {}
+    }, {});
+    immediatePublish.scheduleContent = async production => {
+      immediateProduction = production;
+      return { id: 'schedule-direct', productionId: production.id, status: 'scheduled' };
+    };
+    immediatePublish.publishContent = async (_id, options) => {
+      immediateOptions = options;
+      return { status: 'published' };
+    };
+    await immediatePublish.publishImmediately({
+      id: 'prod-direct',
+      scheduledPublishTime: new Date(Date.now() + 86400000).toISOString()
+    });
+    if (
+      Math.abs(new Date(immediateProduction.scheduledPublishTime).getTime() - Date.now()) > 5000 ||
+      immediateOptions?.publishNow !== true
+    ) {
+      throw new Error('Automatic publishing retained a future publish time instead of uploading immediately');
+    }
+
     this.logger.info('Publishing safety test completed successfully');
+  }
+
+  async testAutomaticImmediatePublishing() {
+    const { YouTubeAutomationAgent } = require('./index');
+    let publicationInput = null;
+    let savedReview = null;
+    let productionStatus = null;
+
+    const agent = new YouTubeAutomationAgent();
+    agent.db = {
+      getChannelProfile: async () => ({}),
+      getSetting: async () => 'false',
+      saveProductionData: async () => 'auto-publish-production',
+      saveProductionSnapshot: async () => {},
+      saveContentReview: async (_id, review) => { savedReview = review; },
+      updateProductionStatus: async (_id, status) => { productionStatus = status; }
+    };
+    agent.provenance = {
+      initialize: async () => ({ status: 'not_required', sources: [], claims: [] })
+    };
+    agent.operator = {
+      runQualityChecks: async () => ({ passed: true, score: 100, checks: [], blockingFailures: [] }),
+      notify: async () => {}
+    };
+    agent.agents = {
+      strategy: { generateContentStrategy: async () => ({ topic: 'Immediate publish test' }) },
+      scriptWriter: { generateScript: async () => ({ title: 'Immediate publish test', fullScript: 'Test script.' }) },
+      thumbnailDesigner: { generateThumbnail: async () => ({ path: 'thumbnail.jpg' }) },
+      seoOptimizer: { optimize: async () => ({ title: 'Immediate publish test', description: 'Description', tags: [] }) },
+      production: {
+        processContent: async input => ({
+          id: 'auto-publish-production',
+          status: 'ready',
+          ...input,
+          assets: { finalVideo: { path: 'video.mp4' } },
+          timeline: {},
+          scheduledPublishTime: new Date(Date.now() + 86400000).toISOString(),
+          priority: 50
+        })
+      },
+      publishing: {
+        publishImmediately: async input => {
+          publicationInput = input;
+          return {
+            status: 'published',
+            publishedAt: new Date().toISOString(),
+            youtubeUrl: 'https://www.youtube.com/watch?v=test-video'
+          };
+        }
+      }
+    };
+
+    const result = await agent.generateContent(null, null, 'short', { strategyContext: null });
+    if (
+      result.reviewStatus !== 'approved' ||
+      result.status !== 'published' ||
+      result.scheduledFor !== null ||
+      publicationInput?.id !== 'auto-publish-production' ||
+      savedReview?.status !== 'approved' ||
+      productionStatus !== 'published'
+    ) {
+      throw new Error('Passing content was not auto-approved and published immediately');
+    }
+
+    this.logger.info('Automatic immediate publishing test completed successfully');
+  }
+
+  async testManualApprovalPublishesImmediately() {
+    const { YouTubeAutomationAgent } = require('./index');
+    let publicationInput = null;
+    let savedReview = null;
+    let productionStatus = null;
+    const bundle = {
+      id: 'manual-approval-production',
+      status: 'ready',
+      strategy: { topic: 'Manual approval test' },
+      script: { title: 'Manual approval test', fullScript: 'A reviewed script.' },
+      seo: { title: 'Manual approval test', description: 'Description', tags: [] },
+      assets: { finalVideo: { path: 'video.mp4' } },
+      editorData: {},
+      scheduled_publish_time: new Date(Date.now() + 86400000).toISOString(),
+      provenance: { status: 'not_required' },
+      scenes: []
+    };
+    const agent = new YouTubeAutomationAgent();
+    agent.db = {
+      getProductionBundle: async () => bundle,
+      getChannelProfile: async () => ({}),
+      saveContentReview: async (_id, review) => { savedReview = review; },
+      updateProductionStatus: async (_id, status) => { productionStatus = status; }
+    };
+    agent.operator = {
+      runQualityChecks: async () => ({ passed: true, score: 100, checks: [], blockingFailures: [] }),
+      notify: async () => {}
+    };
+    agent.agents = {
+      publishing: {
+        publishImmediately: async input => {
+          publicationInput = input;
+          return {
+            status: 'published',
+            publishedAt: new Date().toISOString(),
+            youtubeUrl: 'https://www.youtube.com/watch?v=manual-test'
+          };
+        }
+      }
+    };
+
+    const result = await agent.approveContent('manual-approval-production', {
+      factChecked: true,
+      rightsConfirmed: true,
+      privacyStatus: 'public'
+    });
+    if (
+      result.status !== 'published' ||
+      result.youtubeUrl !== 'https://www.youtube.com/watch?v=manual-test' ||
+      publicationInput?.id !== bundle.id ||
+      publicationInput?.scheduledPublishTime === bundle.scheduled_publish_time ||
+      savedReview?.status !== 'approved' ||
+      productionStatus !== 'published'
+    ) {
+      throw new Error('Manual approval did not publish immediately instead of scheduling');
+    }
+
+    this.logger.info('Manual approval immediate publishing test completed successfully');
   }
 
   async testCredentialValidation() {

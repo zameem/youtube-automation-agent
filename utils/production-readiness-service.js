@@ -147,6 +147,9 @@ class ProductionReadinessService {
   async probeImage(tempDir, includePaidMedia) {
     if (this.probes.image) return this.probes.image({ tempDir, includePaidMedia });
     const generator = new AIVideoGenerator(this.credentialManager.credentials || {});
+    if (!generator.imageGenerationEnabled) {
+      return { status: 'skipped', message: 'Paid image generation is disabled; free local graphics will be used.' };
+    }
     if (!generator.openai && !generator.gemini) {
       return { status: 'warning', message: 'No AI image provider is configured; gradient visuals will be used.', remediation: 'Configure OpenAI or Gemini image access if generated visuals are required.' };
     }
